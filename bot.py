@@ -8,9 +8,9 @@ from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboar
 from langchain_community.chat_models import GigaChat
 
 # --- КОНФИГУРАЦИЯ ---
-API_TOKEN = '8013021965:AAFFArJIdODZihFkJTiSk7GwZxaT_-pHiy4'
-GIGACHAT_CREDENTIALS = 'NjM5NWJjYTktNGVhMC00ODA5LWJjYjMtMDhhMzc2NTIxNmRkOmE1ZDc2ZGM5LWNhZmQtNGExOC04MWMyLWZmMTE4NGYzMmIzOQ=='
-ADMIN_ID = 1920949380
+API_TOKEN = 'токен бота'
+GIGACHAT_CREDENTIALS = 'токен из GIGACHAT'
+ADMIN_ID = id профиля администратора бота
 
 MANUALS_DIR = "manuals"
 os.makedirs(MANUALS_DIR, exist_ok=True)
@@ -81,7 +81,7 @@ async def back_to_main(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "list_files")
 async def show_manuals(callback: types.CallbackQuery):
-    await callback.message.edit_text("📂 **Выберите файл для просмотра:**", reply_markup=get_files_kb())
+    await callback.message.edit_text("📂 Выберите файл для просмотра:", reply_markup=get_files_kb())
 
 @dp.callback_query(F.data == "ask_support")
 async def support_init(callback: types.CallbackQuery):
@@ -181,11 +181,12 @@ async def handle_all_messages(message: types.Message):
 
     except Exception as e:
         logging.error(f"GigaChat Error: {e}")
-        await wait_msg.edit_text("⚠️ **Ошибка нейросети.** Попробуйте позже или свяжитесь с админом.")
+        await wait_msg.edit_text("⚠️ **Ошибка. Попробуйте позже.")
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+
     asyncio.run(main())
