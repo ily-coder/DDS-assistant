@@ -22,8 +22,8 @@ logger = logging.getLogger("VK_BOT")
 # НАСТРОЙКИ
 # =========================================================
 
-VK_TOKEN = "vk1.a.gboxcZfJGJ9mcnPBAa60DPYn8xZY63lBRQXZ90usMpinddHFxD7rqRQHpGUDkDwFR9FjPQJTCitCR4m_LK4z90OhwLy73oAN1hsyCYZuWUcNzSlWfr5LG8DRinOhjtO_rYbs2RgEYmmb9kQw3jSUF99sW7MXkDhvvzR1wZhCNCF-aJOlJqcBoy7nRq9aKThGKAG6ssmLb_uusPnUpbWFSQ"
-GROUP_ID = 237545520
+VK_TOKEN = "TOKEN"
+GROUP_ID = 000000000
 
 SUPPORT_URL = "https://forms.yandex.ru/"
 
