@@ -1,192 +1,372 @@
-import asyncio
+import vk_api
+from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
+from vk_api.utils import get_random_id
+from vk_api.keyboard import VkKeyboard, VkKeyboardColor
+
 import logging
-import os
-import fitz  # PyMuPDF
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
-from langchain_community.chat_models import GigaChat
+import re
+import time
 
-# --- КОНФИГУРАЦИЯ ---
-API_TOKEN = 'токен бота'
-GIGACHAT_CREDENTIALS = 'токен из GIGACHAT'
-ADMIN_ID = id профиля администратора бота
+# =========================================================
+# ЛОГИРОВАНИЕ
+# =========================================================
 
-MANUALS_DIR = "manuals"
-os.makedirs(MANUALS_DIR, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
-giga = GigaChat(credentials=GIGACHAT_CREDENTIALS, verify_ssl_certs=False)
+logger = logging.getLogger("VK_BOT")
 
-# Хранилище временных состояний (в продакшене лучше использовать FSM/Redis)
-user_states = {}
+# =========================================================
+# НАСТРОЙКИ
+# =========================================================
 
-logging.basicConfig(level=logging.INFO)
+VK_TOKEN = "vk1.a.gboxcZfJGJ9mcnPBAa60DPYn8xZY63lBRQXZ90usMpinddHFxD7rqRQHpGUDkDwFR9FjPQJTCitCR4m_LK4z90OhwLy73oAN1hsyCYZuWUcNzSlWfr5LG8DRinOhjtO_rYbs2RgEYmmb9kQw3jSUF99sW7MXkDhvvzR1wZhCNCF-aJOlJqcBoy7nRq9aKThGKAG6ssmLb_uusPnUpbWFSQ"
+GROUP_ID = 237545520
 
-# --- КЛАВИАТУРЫ ---
+SUPPORT_URL = "https://forms.yandex.ru/"
 
-def get_main_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📚 База инструкций", callback_data="list_files")],
-        [InlineKeyboardButton(text="🆘 Поддержка", callback_data="ask_support")]
-    ])
+# =========================================================
+# БАЗА ВОПРОСОВ И ОТВЕТОВ
+# =========================================================
 
-def get_files_kb():
-    files = [f for f in os.listdir(MANUALS_DIR) if f.endswith(".pdf")]
-    buttons = [[InlineKeyboardButton(text=f"📄 {f[:40]}", callback_data=f"open_{f[:40]}")] for f in files]
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+QA_DATABASE = {
 
-def get_admin_reply_kb(user_id):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Ответить пользователю", callback_data=f"reply_to_{user_id}")]
-    ])
+    # =====================================================
+    # ИМРШ
+    # =====================================================
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+    "какие типы датчиков метана могут устанавливаться в блок имрш":
+        "Оптический (ИМРШ.ПБО), лазерный (ИМРШ.ПБЛ) или термокаталитический (ИМРШ.ПБТ).",
 
-def get_best_context(query):
-    files = [f for f in os.listdir(MANUALS_DIR) if f.endswith(".pdf")]
-    query_words = [w.lower() for w in query.split() if len(w) > 3]
-    all_results = []
-    for filename in files:
-        try:
-            doc = fitz.open(os.path.join(MANUALS_DIR, filename))
-            for page in doc:
-                text = page.get_text("text")
-                score = sum(3 if word in text.lower() else 0 for word in query_words)
-                if score > 2:
-                    all_results.append({"text": text[:4000], "page_obj": page, "source": filename, "score": score, "page_num": page.number + 1})
-        except: continue
-    if not all_results: return None
-    all_results.sort(key=lambda x: x['score'], reverse=True)
-    return all_results[0]
+    "в каких диапазонах температур окружающей среды допускается эксплуатировать прибор":
+        "Диапазон температуры окружающей среды от -10 до +50 °С.",
 
-# --- ОБРАБОТЧИКИ ---
+    "что означает знак х после маркировки взрывозащиты":
+        "Знак «Х» означает: эксплуатацию должны выполнять люди, изучившие руководство; блок необходимо защищать от ударов; эксплуатация с повреждением корпуса запрещена.",
 
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    user_states.pop(message.from_user.id, None)
-    await message.answer(
-        f"🛠 **Система поддержки ДДС**\n\nЗдравствуйте, {message.from_user.first_name}!\n"
-        "Вы можете задать вопрос и бот выдаст Вам ответ из руководства.",
-        reply_markup=get_main_kb(),
-        parse_mode="Markdown"
+    "требования к хранению блока имрш":
+        "Запрещено хранить и эксплуатировать блок в помещениях с кремнийорганическими и силиконсодержащими веществами.",
+
+    "степень защиты имрш":
+        "Степень защиты блоков ИМРШ.ПБТ, ИМРШ.ПБО, ИМРШ.ПБЛ — IP54.",
+
+    "какие функции выполняет зарядная станция ИМРШ.ЗС":
+        "Для заряда аккумулятора, встроенного в блок ИМРШ.ПБх, настройки порогов срабатывания сигнализации, градуировки и считывания журнала измерений.",
+
+    # =====================================================
+    # МКУ
+    # =====================================================
+
+    "для чего предназначен модуль мку":
+        "Модуль предназначен для сбора данных с аналоговых и дискретных входов, управления через встроенные реле и передачи данных по RS-485 Modbus RTU.",
+
+    "в каком корпусе разрешается применять модуль":
+        "Во взрывоопасной атмосфере модуль разрешается применять только в защитном корпусе со степенью защиты не менее IP54.",
+
+    "диапазон измерения напряжения постоянного тока":
+        "Диапазон измерения напряжения постоянного тока: от 0 до 2,5 В.",
+
+    "какое значение напряжения питания (Ui) для искробезопасных цепей группы «Пит.» (контакты 13-14) согласно маркировке":
+        "Значение напряжения питания Ui для искробезопасных цепей — 14,4 В.",
+
+    "какой протокол обмена данными используется":
+        "Используется протокол Modbus RTU.",
+
+    "как настраивается режим мост":
+        "Режим Master или Slave выбирается установкой 4 позиции переключателя SB1.",
+
+    # =====================================================
+    # СПБП
+    # =====================================================
+
+    "предупредительные надписи нанесены на крышки":
+        "На крышке электроники: «НЕ ОТКРЫВАТЬ ПРИ ВОЗМОЖНОМ ПРИСУТСТВИИ ВЗРЫВООПАСНОЙ СРЕДЫ». На крышке вводов: «ОТКРЫВАТЬ, ОТКЛЮЧИВ ОТ СЕТИ».",
+
+    "максимальное количество каналов":
+        "Можно настроить батарейную поддержку для трёх каналов, но одновременно не более двух.",
+
+    "параметры рабочих выходов":
+        "Длительный ток нагрузки на каждом выходе — от 0 до 0,6 А.",
+
+    "разница между спбп м1 и м2":
+        "СПБП-М1 использует кабельные вводы, СПБП-М2 — разъёмы для подключения выходов.",
+
+    "что произойдет с аккумулятором при полном разряде":
+        "Произойдет автоматическое отключение аккумулятора для предотвращения повреждения.",
+
+    "срок службы аккумуляторной батареи":
+        "Средний срок службы аккумулятора — не менее 800 циклов заряд/разряд.",
+
+    # =====================================================
+    # СГА
+    # =====================================================
+
+    "для измерения каких газов предназначен прибор":
+        "Прибор измеряет метан, кислород, оксид и диоксид углерода, а также температуру и давление.",
+
+    "диапазон измерений объемной доли метана":
+        "Диапазон измерения метана: от 0 до 2,5 %.",
+
+    "предел допускаемой абсолютной погрешности":
+        "Предел допускаемой абсолютной погрешности по кислороду — ±0,5 %.",
+
+    "сколько времени требуется прибору на прогрев":
+        "Время прогрева прибора — не более 120 секунд.",
+
+    "каким образом осуществляется выбор типа регистров":
+        "Выбор режима осуществляется в меню «НАСТР. ВЫХ» → «РЕЖИМ РЕГИСТРОВ».",
+
+    "формула пересчета для значения объемной доли метана":
+        "Объемная доля [%] = принятое значение / 100.",
+
+    "в каких помещениях недопустимо хранить и эксплуатировать прибор":
+        "Недопустимо эксплуатировать прибор в помещениях с кремнийорганическими и силиконсодержащими веществами (герметики, обувь, обработанная силиконовыми водоотталкивающими веществами и т.п.). Содержание агрессивных примесей (хлора, серы, фосфора, мышьяка, сурьмы, кремния и их соединений) не должно превышать ПДК рабочей зоны."
+}
+
+# =========================================================
+# ПОИСК ОТВЕТА
+# =========================================================
+
+def normalize_text(text):
+
+    text = text.lower()
+
+    text = text.replace("ё", "е")
+
+    text = re.sub(r"[^а-яa-z0-9\s]", " ", text)
+
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
+
+
+def find_answer(question):
+
+    question = normalize_text(question)
+
+    # точное совпадение
+    for key, answer in QA_DATABASE.items():
+
+        if key in question:
+            return answer
+
+    # поиск по словам
+    best_score = 0
+    best_answer = None
+
+    q_words = set(question.split())
+
+    for key, answer in QA_DATABASE.items():
+
+        key_words = set(key.split())
+
+        score = len(q_words & key_words)
+
+        if score > best_score:
+            best_score = score
+            best_answer = answer
+
+    if best_score >= 3:
+        return best_answer
+
+    return None
+
+# =========================================================
+# КЛАВИАТУРА
+# =========================================================
+
+def get_keyboard():
+
+    keyboard = VkKeyboard(one_time=False)
+
+    keyboard.add_button(
+        "📝 Задать вопрос",
+        color=VkKeyboardColor.PRIMARY
     )
 
-@dp.callback_query(F.data == "main_menu")
-async def back_to_main(callback: types.CallbackQuery):
-    user_states.pop(callback.from_user.id, None)
-    await callback.message.edit_text("🛠 **Главное меню**", reply_markup=get_main_kb())
+    keyboard.add_line()
 
-@dp.callback_query(F.data == "list_files")
-async def show_manuals(callback: types.CallbackQuery):
-    await callback.message.edit_text("📂 Выберите файл для просмотра:", reply_markup=get_files_kb())
-
-@dp.callback_query(F.data == "ask_support")
-async def support_init(callback: types.CallbackQuery):
-    user_states[callback.from_user.id] = 'waiting_support_msg'
-    await callback.message.edit_text(
-        "📝 **Опишите вашу проблему одним сообщением:**\n\nАдминистрация бота получит ваш запрос и ответит прямо здесь.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu")]])
+    keyboard.add_openlink_button(
+        "🆘 Техподдержка",
+        SUPPORT_URL
     )
 
-# Кнопка ответа для админа
-@dp.callback_query(F.data.startswith("reply_to_"))
-async def admin_reply_start(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        return await callback.answer("Ошибка")
+    return keyboard.get_keyboard()
 
-    target_user_id = int(callback.data.replace("reply_to_", ""))
-    user_states[ADMIN_ID] = f'typing_reply_{target_user_id}'
-    await callback.message.answer(f"✍️ Введите ответ для пользователя (ID: {target_user_id}):")
-    await callback.answer()
+# =========================================================
+# БОТ
+# =========================================================
 
-@dp.message(F.text)
-async def handle_all_messages(message: types.Message):
-    state = user_states.get(message.from_user.id)
+class Bot:
 
-    # 1. Режим ожидания вопроса от пользователя
-    if state == 'waiting_support_msg':
-        await bot.send_message(
-            ADMIN_ID,
-            f"🔔 **НОВЫЙ ВОПРОС**\n👤 От: {message.from_user.full_name}\n🆔 ID: {message.from_user.id}\n\n💬 {message.text}",
-            reply_markup=get_admin_reply_kb(message.from_user.id)
+    def __init__(self):
+
+        self.vk_session = vk_api.VkApi(
+            token=VK_TOKEN
         )
-        user_states.pop(message.from_user.id)
-        await message.answer("✅ Сообщение отправлено администрации бота. Ожидайте ответа.", reply_markup=get_main_kb())
-        return
 
-    # 2. Режим написания ответа админом
-    if state and state.startswith('typing_reply_'):
-        target_id = int(state.replace('typing_reply_', ''))
+        self.vk = self.vk_session.get_api()
+
+        self.longpoll = VkBotLongPoll(
+            self.vk_session,
+            GROUP_ID
+        )
+
+        logger.info("Бот запущен.")
+
+    # =====================================================
+
+    def send(self, user_id, text):
+
         try:
-            await bot.send_message(target_id, f"👨‍🔧 **Ответ администрации бота:**\n\n{message.text}")
-            await message.answer("🚀 Ответ успешно доставлен!")
+
+            self.vk.messages.send(
+                user_id=user_id,
+                random_id=get_random_id(),
+                message=text,
+                keyboard=get_keyboard()
+            )
+
         except Exception as e:
-            await message.answer(f"❌ Не удалось отправить ответ: {e}")
-        user_states.pop(ADMIN_ID)
-        return
 
-    # 3. Стандартный поиск через ИИ
-    wait_msg = await message.answer("🔍 **Анализирую техническую документацию...**")
-    context = get_best_context(message.text)
+            logger.error(f"Ошибка отправки: {e}")
 
-    if not context:
-        return await wait_msg.edit_text(
-            "❌ **В официальных руководствах нет информации по этому запросу.**\n\n"
-            "Попробуйте:\n"
-            "• Проверить правильность написания модели\n"
-            "• Использовать другие ключевые слова\n"
-            "• Нажать кнопку **'Написать в поддержку'**",
-            reply_markup=get_main_kb()
-        )
+    # =====================================================
 
-    #ПРОМПТ ДЛЯ GIGACHAT
-    prompt = (
-        "ТЫ: Ведущий инженер техподдержки компании ДДС. Твоя речь профессиональна, точна и лаконична.\n"
-        "ЗАДАЧА: Ответить на вопрос рабочего, используя только предоставленный ТЕКСТ ИЗ ИНСТРУКЦИИ.\n\n"
-        "ПРАВИЛА ОТВЕТА:\n"
-        "1. Начни ответ с прямой фразы: 'Согласно инструкции к [название файла]...'\n"
-        "2. Если в тексте есть пошаговый алгоритм — представь его нумерованным списком.\n"
-        "3. Важные параметры (давление, напряжение, названия узлов) выделяй ЖИРНЫМ шрифтом.\n"
-        "4. Если в тексте НЕТ прямого ответа, напиши: 'В предоставленном фрагменте документации точных данных нет, обратитесь к инженеру через кнопку Поддержка'.\n"
-        "5. Запрещено использовать свои знания из интернета. Только приложенный текст!\n\n"
-        f"ИСТОЧНИК ТЕКСТА:\n{context['text']}\n\n"
-        f"ВОПРОС ПОЛЬЗОВАТЕЛЯ: {message.text}\n\n"
-        "ТВОЙ ИНЖЕНЕРНЫЙ ОТВЕТ:"
-    )
+    def welcome(self, user_id, name):
 
-    try:
-        # Вызываем GigaCha
-        res = giga.invoke(prompt)
-        response = res.content
+        text = f"""
+Здравствуйте, {name}!
 
-        page = context['page_obj']
-        # Увеличиваем четкость скриншота (zoom=2.0)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
-        photo = BufferedInputFile(pix.tobytes("png"), filename="manual_page.png")
+Я технический бот компании ООО «ДД-СЕРВИС».
 
-        await message.answer_photo(
-            photo=photo,
-            caption=(
-                f"📖 **Файл:** `{context['source']}`\n"
-                f"📄 **Страница:** {context['page_num']}\n\n"
-                f"{response[:900]}"
-            ),
-            reply_markup=get_main_kb(),
-            parse_mode="Markdown"
-        )
-        await wait_msg.delete()
+Я отвечаю на вопросы по оборудованию:
+• ИМРШ
+• МКУ
+• СПБП
+• СГА
 
-    except Exception as e:
-        logging.error(f"GigaChat Error: {e}")
-        await wait_msg.edit_text("⚠️ **Ошибка. Попробуйте позже.")
+Примеры вопросов:
+• Для чего предназначен модуль МКУ?
+• Какой протокол используется?
+• Каков диапазон температуры ИМРШ?
+• Сколько времени требуется СГА на прогрев?
+"""
 
-async def main():
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+        self.send(user_id, text.strip())
+
+    # =====================================================
+
+    def run(self):
+
+        logger.info("Ожидание сообщений...")
+
+        for event in self.longpoll.listen():
+
+            try:
+
+                if event.type != VkBotEventType.MESSAGE_NEW:
+                    continue
+
+                msg = event.object.message
+
+                user_id = msg["from_id"]
+
+                text = msg.get("text", "").strip()
+
+                text_lower = text.lower()
+
+                logger.info(f"{user_id}: {text}")
+
+                # ------------------------------------------------
+
+                try:
+
+                    user_info = self.vk.users.get(
+                        user_ids=user_id
+                    )[0]
+
+                    name = user_info.get("first_name", "пользователь")
+
+                except:
+
+                    name = "пользователь"
+
+                # ------------------------------------------------
+
+                if text_lower in (
+                    "",
+                    "start",
+                    "старт",
+                    "начать",
+                    "привет",
+                    "hello",
+                    "hi"
+                ):
+
+                    self.welcome(user_id, name)
+
+                    continue
+
+                # ------------------------------------------------
+
+                if text == "📝 Задать вопрос":
+
+                    self.send(
+                        user_id,
+                        "Напишите ваш вопрос."
+                    )
+
+                    continue
+
+                # ------------------------------------------------
+
+                self.send(
+                    user_id,
+                    "🔍 Ищу ответ..."
+                )
+
+                answer = find_answer(text)
+
+                if answer:
+
+                    self.send(user_id, answer)
+
+                else:
+
+                    self.send(
+                        user_id,
+                        "К сожалению, точный ответ не найден.\n\n"
+                        "Попробуйте:\n"
+                        "• указать модель устройства\n"
+                        "• написать вопрос подробнее\n"
+                        "• использовать технические термины"
+                    )
+
+                time.sleep(0.2)
+
+            except Exception as e:
+
+                logger.error(f"Ошибка: {e}")
+
+# =========================================================
+# ЗАПУСК
+# =========================================================
 
 if __name__ == "__main__":
 
-    asyncio.run(main())
+    try:
+
+        bot = Bot()
+
+        bot.run()
+
+    except KeyboardInterrupt:
+
+        logger.info("Бот остановлен.")
+
+    except Exception as e:
+
+        logger.error(f"Фатальная ошибка: {e}")
